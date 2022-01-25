@@ -12,9 +12,14 @@ const userRoutes = require('./src/routes/UserRoutes');
 dbConnection();
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`server is running on port ${PORT}`)
 } );
+
+process.on("unhandledRejection", (error, promise) => {
+    console.log(`Error : ${error}`);
+    server.close(() => process.exit(1));
+})
 
 
 app.use('/api/user', userRoutes);
