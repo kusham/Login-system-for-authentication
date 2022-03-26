@@ -1,6 +1,6 @@
 
 
-const errorHandler = (req, res, err, next) => {
+const errorHandler = (err, req, res) => {
     let error = {...err};
     error.message = err.message;
 
@@ -22,4 +22,4 @@ const errorHandler = (req, res, err, next) => {
       });
 }
 
-module.exports = errorHandler;
+//module.exports = errorHandler;

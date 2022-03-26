@@ -24,14 +24,11 @@ const userSchema = new mongoose.Schema(
       required: [true, "Please enter the password"],
       minlength: [6, "password should be contain at least 6 characters"],
     },
+    refreshToken : {
+      type:String
+    },
   },
   { timestamps: true }
 );
-
-userSchema.prependListener("save", async function (next) {
-  const salt = await bcrypt.genSalt();
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
-});
 
 module.exports = mongoose.model("user", userSchema);

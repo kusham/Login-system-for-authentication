@@ -1,73 +1,100 @@
 const userSchema = require("../models/UserModel");
 const bcrypt = require("bcrypt");
-const errorHandling = require("../validations/passwordMatch");
-const { createAccessToken, createRefreshToken } = require("../services/TokenJWT");
-
-let refreshTokens = [];
+const {
+  createAccessToken,
+  createRefreshToken,
+} = require("../services/TokenJWT");
 
 module.exports.signUp = async (req, res) => {
   const { firstName, lastName, email, password, confirmPassword } = req.body;
 
-  errorHandling.isPasswordMatch(password, confirmPassword);
-  errorHandling.isUserExists(email);
-
-  const user = new userSchema({
-    firstName,
-    lastName,
-    email,
-    password,
-  });
-
   try {
+    if (!(password === confirmPassword)) {
+      return res.status(200).json({ error: "Password does not match" });
+    }
+
+    const existsUser = await userSchema.findOne({ email: email });
+
+    if (existsUser) {
+      return res.status(400).json({ error: "This user already exists " });
+    }
+
+    const salt = await bcrypt.genSalt();
+    const encryptPassword = await bcrypt.hash(password, salt);
+
+    const user = new userSchema({
+      firstName,
+      lastName,
+      email,
+      password: encryptPassword,
+    });
     const savedUser = await user.save();
 
     const accessToken = createAccessToken(savedUser._id);
     const refreshToken = createRefreshToken(savedUser._id);
-    refreshTokens.push(refreshToken);
 
-    res
-      .status(200)
-      .json({
-        savedUser,
-        accessToken: accessToken,
-        refreshToken: refreshToken,
-      });
+    await userSchema.updateOne(
+      { _id: savedUser._id },
+      { $set: { refreshToken: refreshToken } }
+    );
+
+    res.cookie("refreshToken", refreshToken, { httpOnly: true });
+
+    res.status(200).json({
+      savedUser,
+      accessToken: accessToken,
+    });
   } catch (error) {
-    next(error);
+    res.status(400).json({ error: error.message });
   }
 };
 
-module.exports.signIn = async (req, res, next) => {
+module.exports.signIn = async (req, res) => {
+  console.log(req);
+  console.log(req.headers);
   const { email, password } = req.body;
   if (!email || !password) {
-    return next(new ErrorResponse("Please provide an email and password", 400));
+    return res
+      .status(403)
+      .json({ error: "Please provide an email and password" });
   }
 
   try {
     const oldUser = await userSchema.findOne({ email: email });
-    if (!user) {
-      return next(new ErrorResponse("Invalid credentials", 401));
+    if (!oldUser) {
+      return res.status(403).json({ error: "Invalid credentials" });
     }
 
-    //console.log(oldUser[0].password);
     const isMatch = await bcrypt.compare(password, oldUser.password);
     if (!isMatch) {
-      return next(new ErrorResponse("Invalid credentials", 401));
+      return res.status(403).json({ error: "Invalid credentials" });
     }
 
     const accessToken = createAccessToken(oldUser._id);
     const refreshToken = createRefreshToken(oldUser._id);
-    refreshTokens.push(refreshToken);
+    await userSchema.updateOne(
+      { _id: oldUser._id },
+      { $set: { refreshToken: refreshToken } }
+    );
 
-    res
-      .status(200)
-      .json({ oldUser, accessToken: accessToken, refreshToken: refreshToken });
+   // res.cookie("refreshToken", refreshToken, { httpOnly: true });
+
+    res.status(200).json({
+      message: "You are log In",
+      user: {
+        firstName: oldUser.firstName,
+        lastName: oldUser.lastName,
+        email: oldUser.email,
+      },
+      accessToken: accessToken,
+      refreshToken: refreshToken 
+    });
   } catch (error) {
-    next(error);
+    res.status(400).json({ error: error.message });
   }
 };
 
-module.exports.deleteUser = async (req, res) => {
+module.exports.deleteUser = async (res, req) => {
   const id = req.params.id;
 
   try {
@@ -83,26 +110,55 @@ module.exports.deleteUser = async (req, res) => {
   }
 };
 
-
-module.exports.refresh = (res, req) => {
+module.exports.refresh = async (res, req) => {
   const refreshToken = req.body.token;
 
-  if (!refreshToken) return res.status(401).json("You are not authenticated!");
-  if (!refreshTokens.includes(refreshToken)) {
-    return res.status(403).json("Refresh token is not valid!");
+  try {
+    if (!refreshToken) {
+      return res
+        .status(401)
+        .json({ message: "You are not authenticated! Please log In" });
+    }
+
+    if (!(await userSchema.findOne({ refreshToken: refreshToken }))) {
+      return res.status(403).json({ message: "Refresh token is not valid!" });
+    }
+
+    jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_KEY,
+      async (err, userID) => {
+        if (err) return res.status(403).json({ error: err.message });
+
+        const newAccessToken = generateAccessToken(userID.id);
+        const newRefreshToken = generateRefreshToken(userID.id);
+
+        await userSchema.updateOne(
+          { _id: userID.id },
+          { $set: { refreshToken: newRefreshToken } }
+        );
+
+        res.cookie("refreshToken", refreshToken, { httpOnly: true });
+
+        res.status(200).json({
+          accessToken: newAccessToken,
+        });
+      }
+    );
+  } catch (error) {
+    res.status(403).json({ error: err.message });
   }
-  jwt.verify(refreshToken, "My refresh token secret key", (err, userID) => {
-    if(err) return res.status(403).json({error: err.message})
-    refreshTokens = refreshTokens.filter((token) => token !== refreshToken);
+};
 
-    const newAccessToken = generateAccessToken(userID);
-    const newRefreshToken = generateRefreshToken(userID);
-
-    refreshTokens.push(newRefreshToken);
-
-    res.status(200).json({
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
-    });
-  });
-}
+module.exports.logOut = async (req, res) => {
+  const { refreshToken } = req.body;
+  try {
+    await userSchema.updateOne(
+      { refreshToken: refreshToken },
+      { $set: { refreshToken: "" } }
+    );
+    res.status(201).json({ message: "Successfully log out..!" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
